@@ -1,6 +1,9 @@
 Require Import Lia.
 Require Import QuantumLib.Permutations.
 Require Import QuantumLib.Eigenvectors.
+Require Import QuantumLib.VecSet.
+Require Import QuantumLib.Polynomial.
+Require Import QuantumLib.Quantum.
 Require Import Coq.Sets.Ensembles.
 Require Import Coq.Logic.Classical_Pred_Type.
 Require Import Coq.Logic.Classical_Prop.
@@ -9,7 +12,9 @@ Require Import Coq.Logic.Classical_Prop.
 (* Helper: extract the k-th factor from a Cprod                       *)
 (* ================================================================== *)
 
-(* skip_seq f k removes element at position k *)
+(* skip_seq f k removes element at position k:
+   skip_seq f k i = f i      if i < k
+   skip_seq f k i = f (i+1)  if i >= k  *)
 Definition skip_seq (f : nat -> C) (k : nat) : nat -> C :=
   fun i => if (i <? k)%nat then f i else f (S i).
 
@@ -18,22 +23,26 @@ Lemma Cprod_extract_k : forall (n : nat) (f : nat -> C) (k : nat),
   Cprod f (S n) = f k * Cprod (skip_seq f k) n.
 Proof.
   induction n as [| n']; intros f k Hk.
-  - assert (k = 0)%nat by lia. subst.
-    simpl. lca.
-  - simpl (Cprod f (S (S n'))).
+  - (* n = 0, so k = 0 *)
+    assert (k = 0%nat) by lia. subst.
+    unfold Cprod, skip_seq. lca.
+  - (* Cprod f (S (S n')) = Cprod f (S n') * f (S n') by definition *)
     bdestruct (k =? S n')%nat.
-    + subst.
+    + (* k is the last element *)
+      subst.
       assert (Hceq : Cprod (skip_seq f (S n')) (S n') = Cprod f (S n')).
       { apply Cprod_eq_bounded; intros i Hi.
         unfold skip_seq. bdestruct (i <? S n')%nat; [reflexivity | lia]. }
+      change (Cprod f (S (S n'))) with (Cprod f (S n') * f (S n')).
       rewrite Hceq. lca.
-    + assert (Hk' : (k < S n')%nat) by lia.
+    + (* k < S n' *)
+      assert (Hk' : (k < S n')%nat) by lia.
+      change (Cprod f (S (S n'))) with (Cprod f (S n') * f (S n')).
       rewrite (IHn' f k Hk').
-      rewrite <- Cmult_assoc.
-      apply f_equal2; [reflexivity |].
-      rewrite <- Cprod_extend_r.
-      apply f_equal.
-      unfold skip_seq. bdestruct (n' <? k)%nat; [lia | reflexivity].
+      (* skip_seq f k n' = f (S n') since n' >= k *)
+      assert (Hss : skip_seq f k n' = f (S n')).
+      { unfold skip_seq. bdestruct (n' <? k)%nat; [lia | reflexivity]. }
+      rewrite <- Cprod_extend_r, Hss. ring.
 Qed.
 
 (* ================================================================== *)
@@ -48,9 +57,7 @@ Proof.
   apply Classical_Prop.NNPP.
   intro HContra.
   assert (Hnnz : forall k, (k < n)%nat -> f k <> C0).
-  { intros k Hk Hfk.
-    apply HContra.
-    exists k. split; assumption. }
+  { intros k Hk Hfk. apply HContra. exists k. split; assumption. }
   exact (Cprod_neq_0_bounded f n Hnnz Hprod).
 Qed.
 
@@ -62,15 +69,17 @@ Lemma cprod_sub_continuous : forall (n : nat) (a : nat -> C) (c0 : C),
   continuous_at (fun c => Cprod (fun i => c - a i) n) c0.
 Proof.
   induction n as [| n']; intros a c0.
-  - replace (fun c => Cprod (fun i : nat => c - a i) 0%nat) with (fun _ : C => C1).
-    + unfold continuous_at. apply limit_const_poly.
-    + apply functional_extensionality; intro c. simpl. reflexivity.
-  - replace (fun c => Cprod (fun i => c - a i) (S n')) with
+  - (* Base case: Cprod ... 0 = C1, constant function *)
+    replace (fun c => Cprod (fun i : nat => c - a i) 0%nat) with (Peval [C1]).
+    + exact (constant_continuous_poly C1 c0).
+    + apply functional_extensionality; intro c. unfold Peval; simpl. lca.
+  - (* Inductive case: Cprod (S n') = Cprod n' * (c - a n') *)
+    replace (fun c => Cprod (fun i => c - a i) (S n')) with
             (fun c => Cprod (fun i => c - a i) n' * (c - a n')).
     + apply continuous_mult.
       * exact (IHn' a c0).
       * replace (fun c => c - a n') with (fun c => Peval [- a n'; C1] c).
-        -- apply polynomial_continuous.
+        -- exact (polynomial_continuous [- a n'; C1] c0).
         -- apply functional_extensionality; intro c.
            unfold Peval; simpl. lca.
     + apply functional_extensionality; intro c. simpl. reflexivity.
@@ -95,18 +104,16 @@ Proof.
               (fun c' => (-C1) * Cprod (fun i => c' - b i) n).
       + apply continuous_mult.
         * replace (fun _ : C => -C1) with (fun c' => Peval [-C1] c').
-          -- apply polynomial_continuous.
+          -- exact (polynomial_continuous [-C1] a0).
           -- apply functional_extensionality; intro c'. unfold Peval; simpl. lca.
         * exact (cprod_sub_continuous n b a0).
       + apply functional_extensionality; intro c'. lca. }
   assert (Hdiff_zero : forall c', c' <> a0 ->
       Cprod (fun i => c' - a i) n - Cprod (fun i => c' - b i) n = C0).
   { intros c' Hc'. rewrite (H c' Hc'). lca. }
-  pose proof (constant_ae_continuous
-               (fun c' => Cprod (fun i => c' - a i) n -
-                           Cprod (fun i => c' - b i) n)
-               C0 a0 Hdiff_cont Hdiff_zero) as Hlim.
-  lca.
+  pose proof (constant_ae_continuous _ C0 a0 Hdiff_cont Hdiff_zero) as Hlim.
+  cbv beta in Hlim.
+  exact (Cminus_eq_0 _ _ Hlim).
 Qed.
 
 (* ================================================================== *)
@@ -119,17 +126,21 @@ Lemma poly_roots_perm : forall (n : nat) (a b : nat -> C),
     permutation n σ /\ forall (i : nat), (i < n)%nat -> a i = b (σ i).
 Proof.
   induction n as [| n']; intros a b Heq.
-  - exists Datatypes.id.
+  - (* n = 0: identity permutation *)
+    exists Datatypes.id.
     split; [apply id_permutation | intros i Hi; lia].
-  - (* Find k with b k = a n' *)
+  - (* n = S n' *)
+    (* Find k < S n' with b k = a n' *)
     assert (HaRoot : Cprod (fun j => a n' - b j) (S n') = C0).
-    { rewrite (Heq (a n')).
+    { rewrite <- (Heq (a n')).
       apply Cprod_0_bounded.
       exists n'. split; [lia | lca]. }
     apply Cprod_zero_some_factor in HaRoot.
-    destruct HaRoot as [k [Hk Hbk_zero]].
-    assert (Hbk : b k = a n') by lca.
-    (* For c != a n', cancel (c - a n') *)
+    destruct HaRoot as (k & Hk & Hbk_zero).
+    (* b k = a n' *)
+    assert (Hbk : b k = a n').
+    { exact (eq_sym (Cminus_eq_0 _ _ Hbk_zero)). }
+    (* For c != a n', cancel (c - a n') from both sides *)
     assert (Hcprod_ne : forall c, c <> a n' ->
         Cprod (fun i => c - a i) n' =
         Cprod (fun j => c - skip_seq b k j) n').
@@ -140,45 +151,44 @@ Proof.
       { simpl. reflexivity. }
       assert (HRHS : Cprod (fun j => c - b j) (S n') =
                      (c - b k) * Cprod (fun j => c - skip_seq b k j) n').
-      { apply Cprod_extract_k. exact Hk. }
+      { rewrite (Cprod_extract_k n' (fun j => c - b j) k Hk).
+        cbv beta. f_equal.
+        apply Cprod_eq_bounded. intros i Hi.
+        unfold skip_seq. bdestruct (i <? k)%nat; reflexivity. }
       rewrite HLHS, HRHS, Hbk in HfullEq.
-      assert (Hca' : (c - a n') <> C0) by (intro H'; apply Hca; lca).
+      assert (Hca' : (c - a n') <> C0).
+      { intro H'. exact (Hca (Cminus_eq_0 _ _ H')). }
       apply Cmult_cancel_r with (a := c - a n').
       - exact Hca'.
       - rewrite HfullEq. ring. }
-    (* Extend to all c *)
+    (* Extend to all c by continuity *)
     pose proof (cprod_sub_eq_all n' a (skip_seq b k) (a n') Hcprod_ne) as Hcprod_all.
-    (* Apply IH *)
-    destruct (IHn' a (skip_seq b k) Hcprod_all) as [σ' [Hperm' Hroots']].
-    (* Construct σ: σ(n') = k, σ(i) = unskip(σ'(i), k) *)
+    (* Apply inductive hypothesis *)
+    destruct (IHn' a (skip_seq b k) Hcprod_all) as (σ' & Hperm' & Hroots').
+    (* Construct σ: σ(n') = k, σ(i) = unskip(σ'(i), k) for i < n' *)
     exists (fun i => if (i =? n')%nat then k
                      else if (σ' i <? k)%nat then σ' i else S (σ' i)).
     split.
-    + (* Permutation via surjectivity *)
+    + (* Prove permutation via surjectivity *)
       rewrite permutation_iff_surjective.
       intros j Hj.
       bdestruct (j =? k)%nat.
-      * (* j = k: i = n' works *)
-        subst.
-        exists n'. split; [lia |].
+      * (* j = k: preimage is n' *)
+        subst. exists n'. split; [lia |].
         bdestruct (n' =? n')%nat; [reflexivity | lia].
-      * (* j != k *)
-        (* j' = skip(j, k) < n' *)
-        set (j' := if (j <? k)%nat then j else j - 1).
+      * (* j != k: find preimage in {0,...,n'-1} *)
+        set (j' := if (j <? k)%nat then j else (j - 1)%nat).
         assert (Hj'_lt : (j' < n')%nat).
         { unfold j'. bdestruct (j <? k)%nat; lia. }
-        destruct (permutation_is_surjective n' σ' Hperm' j' Hj'_lt) as [i [Hi Hσi]].
+        destruct (permutation_is_surjective n' σ' Hperm' j' Hj'_lt) as (i & Hi & Hσi).
         exists i. split; [lia |].
         bdestruct (i =? n')%nat; [lia |].
         rewrite Hσi.
         unfold j'.
         bdestruct (j <? k)%nat.
-        -- (* j < k: j' = j, unskip(j,k) = j *)
-           bdestruct (j <? k)%nat; [reflexivity | lia].
-        -- (* j > k: j' = j-1 >= k, unskip(j-1,k) = j *)
-           bdestruct ((j-1) <? k)%nat; [lia |].
-           lia.
-    + (* Values match *)
+        -- bdestruct (j <? k)%nat; [reflexivity | lia].
+        -- bdestruct ((j - 1) <? k)%nat; [lia | lia].
+    + (* Prove the values match *)
       intros i Hi.
       bdestruct (i =? n')%nat.
       * subst. symmetry. exact Hbk.
@@ -190,7 +200,7 @@ Proof.
 Qed.
 
 (* ================================================================== *)
-(* Determinant of (c·I - D) for diagonal D = Cprod (c - D i i) n     *)
+(* Determinant of (c*I - D) for diagonal D equals Cprod (c - D i i)  *)
 (* ================================================================== *)
 
 Lemma det_c_minus_diag : forall {n} (D : Square n) (c : C),
@@ -199,17 +209,22 @@ Lemma det_c_minus_diag : forall {n} (D : Square n) (c : C),
 Proof.
   intros n D c [WF_D Hdiag].
   rewrite det_up_tri_diags.
-  - apply Cprod_eq_bounded. intros i Hi.
+  - (* Show diagonal entries equal c - D i i *)
+    apply Cprod_eq_bounded. intros i Hi.
     unfold Mplus, scale, I.
-    bdestruct (i =? i)%nat; [| lia]. lca.
-  - apply up_tri_plus.
+    rewrite Nat.eqb_refl.
+    apply Nat.ltb_lt in Hi. rewrite Hi.
+    lca.
+  - (* Show (c*I - D) is upper triangular *)
+    apply up_tri_plus.
     + apply up_tri_scale. apply up_tri_I.
-    + unfold upper_triangular; intros i j Hij.
-      unfold scale. rewrite Hdiag; [lca | lia].
+    + apply up_tri_scale.
+      unfold upper_triangular. intros i j Hij.
+      apply Hdiag. lia.
 Qed.
 
 (* ================================================================== *)
-(* Determinant invariant under unitary conjugation                    *)
+(* Determinant is invariant under unitary conjugation                 *)
 (* ================================================================== *)
 
 Lemma det_unitary_conj : forall {n} (U M : Square n),
@@ -217,15 +232,17 @@ Lemma det_unitary_conj : forall {n} (U M : Square n),
   Determinant (U × M × U†) = Determinant M.
 Proof.
   intros n U M [WF_U HUU].
-  repeat rewrite Determinant_multiplicative.
-  rewrite Determinant_adjoint.
-  assert (Hdet1 : Determinant U * Cconj (Determinant U) = C1).
-  { rewrite <- Determinant_adjoint.
-    rewrite <- Determinant_multiplicative.
-    rewrite HUU. apply Det_I. }
-  assert (H' : Determinant U * Determinant M * Cconj (Determinant U) =
-               Determinant M * (Determinant U * Cconj (Determinant U))) by ring.
-  rewrite H', Hdet1. ring.
+  (* From U† × U = I, derive U × U† = I *)
+  assert (HUU' : U × U† = I n).
+  { apply Minv_flip; auto with wf_db. }
+  (* Det(U) * Det(U†) = 1 *)
+  assert (Hdet : Determinant U * Determinant (U†) = C1).
+  { rewrite Determinant_multiplicative, HUU'. apply Det_I. }
+  (* Expand Det(U × M × U†) = Det(U) * Det(M) * Det(U†) *)
+  repeat rewrite <- Determinant_multiplicative.
+  replace (Determinant U * Determinant M * Determinant (U†)) with
+          (Determinant M * (Determinant U * Determinant (U†))) by ring.
+  rewrite Hdet. ring.
 Qed.
 
 (* ================================================================== *)
@@ -237,32 +254,55 @@ Lemma perm_eigenvalues : forall {n} (U D D' : Square n),
   exists (σ : nat -> nat),
     permutation n σ /\ forall (i : nat), D i i = D' (σ i) (σ i).
 Proof.
-  intros n U D D' HU HD HD' Heq.
-  (* Step 1: equal Cprod for all c *)
+  intros n U D D' [WF_U HUU] HD HD' Heq.
+  (* Derive U × U† = I n from U† × U = I n *)
+  assert (HUU' : U × U† = I n).
+  { apply Minv_flip; auto with wf_db. }
+  (* Step 1: For all c, Det(c*I - D) = Det(c*I - D') *)
   assert (Hcprod : forall c,
       Cprod (fun i => c - D i i) n = Cprod (fun i => c - D' i i) n).
   { intro c.
     rewrite <- (det_c_minus_diag D c HD).
     rewrite <- (det_c_minus_diag D' c HD').
-    (* (c.I - D') = U(c.I - D)U† *)
+    (* (c*I - D') = U × (c*I - D) × U† *)
+    assert (HcI : U × (c .* I n) × U† = c .* I n).
+    { rewrite Mscale_mult_dist_r.
+      rewrite Mmult_1_r; [| exact WF_U].
+      rewrite Mscale_mult_dist_l, HUU'.
+      reflexivity. }
+    assert (HcD : U × ((-C1) .* D) × U† = (-C1) .* D').
+    { rewrite Mscale_mult_dist_r, Mscale_mult_dist_l.
+      f_equal. exact Heq. }
     assert (HcID : (c .* I n) .+ ((-C1) .* D') =
                     U × ((c .* I n) .+ ((-C1) .* D)) × U†).
-    { destruct HU as [WF_U HUU].
-      repeat rewrite Mmult_plus_distr_l, Mmult_plus_distr_r.
-      repeat rewrite Mscale_mult_dist_r, Mscale_mult_dist_l.
-      assert (HcI : U × (c .* I n) × U† = c .* I n).
-      { rewrite Mscale_mult_dist_l, Mscale_mult_dist_r.
-        rewrite Mmult_1_r; [| apply WF_U].
-        rewrite HUU. rewrite Mscale_mult_dist_l, Mmult_1_r; [reflexivity | apply WF_I]. }
-      assert (HcD : U × ((-C1) .* D) × U† = (-C1) .* D').
-      { rewrite Mscale_mult_dist_l, Mscale_mult_dist_r.
-        rewrite <- Heq. reflexivity. }
+    { rewrite Mmult_plus_distr_l, Mmult_plus_distr_r.
       rewrite HcI, HcD. reflexivity. }
-    rewrite HcID. symmetry. apply det_unitary_conj. exact HU. }
-  (* Step 2: apply poly_roots_perm *)
+    rewrite HcID. symmetry. apply det_unitary_conj. split; assumption. }
+  (* Step 2: Apply poly_roots_perm *)
   destruct (poly_roots_perm n (fun i => D i i) (fun i => D' i i) Hcprod)
-    as [σ [Hperm Hroots]].
-  exists σ. split; [exact Hperm | exact Hroots].
+    as (σ & Hperm & Hroots).
+  (* Extend σ to be the identity outside [0, n-1] so out-of-bounds indices
+     also satisfy D i i = D' (σ i) (σ i) = 0 *)
+  exists (fun i => if (i <? n)%nat then σ i else i).
+  split.
+  - (* Prove it is a permutation of [0, n-1] *)
+    rewrite permutation_iff_surjective.
+    intros j Hj.
+    destruct (permutation_is_surjective n σ Hperm j Hj) as (i & Hi & Hσi).
+    exists i. split; [exact Hi |].
+    apply Nat.ltb_lt in Hi. rewrite Hi. exact Hσi.
+  - (* Prove values match *)
+    intros i. cbv beta.
+    destruct (Nat.ltb i n) eqn:Heqb.
+    + (* (i <? n) = true, so i < n *)
+      apply Nat.ltb_lt in Heqb.
+      exact (Hroots i Heqb).
+    + (* (i <? n) = false, so i >= n: both D i i and D' i i are 0 by WF_Matrix *)
+      assert (Hni : (n <= i)%nat) by (apply Nat.ltb_nlt in Heqb; lia).
+      destruct HD as [WF_D _]. destruct HD' as [WF_D' _].
+      rewrite (WF_D i i (or_introl Hni)).
+      rewrite (WF_D' i i (or_introl Hni)).
+      reflexivity.
 Qed.
 
 (* To equate the eigenvalues of two matrices, we often need equality of matrices
