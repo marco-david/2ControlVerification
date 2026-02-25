@@ -15,7 +15,7 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
       pkgs-unstable = nixpkgs-unstable.legacyPackages.${system};
-      coq-quantumlib-version = "v1.5.0";
+      coq-quantumlib-version = "v1.4.0";
     in
     let
       coq-quantumlib = pkgs.coqPackages.mkCoqDerivation {
@@ -25,8 +25,8 @@
 
         defaultVersion = coq-quantumlib-version;
         release.${coq-quantumlib-version} = {
-          rev = "ee147b9c18265cb22b780b9dce8d5a386a78b807";
-          sha256 = "sha256-3zGrJPQZzxtRpEQa1J4vrI6hnxoq4hhXvyL7pWipxwU=";
+          rev = "80018571961e13968bfd80ea9cb061d9469b0817";
+          sha256 = "sha256-mx74GxIwF6mgmrELmNl0l3GiBBf/WrpouHfszylhTYQ=";
         };
         useDune = true;
       };
